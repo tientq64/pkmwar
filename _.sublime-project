@@ -1,0 +1,9 @@
+{
+	"folders": [{
+		"path": "."
+	}],
+	"build_systems": [{
+		"name": "Build",
+		"shell_cmd": "taskkill -f -im node.exe & cd $folder && ls2 build.ls && live-server -q --port=5500 --no-browser"
+	}]
+}
