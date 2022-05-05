@@ -12,7 +12,9 @@ names = <[
 	pokemon_moves
 	types
 	type_efficacy
+	stats
 	moves
+	move_names
 	move_damage_classes
 	move_effect_prose
 	move_targets
@@ -21,11 +23,6 @@ names = <[
 toCamelCase = (text) ->
 	(text + "")replace /[^a-zA-Z]+([a-zA-Z])?/g (, s1) ~>
 		s1 and s1.toUpperCase! or ""
-
-writeCsv = (filename, data) !->
-	data = papaparse.unparse data,
-		newline: \\n
-	fs.outputFileSync "data/#filename.csv" data
 
 db = await Promise.all names.map (name) ~>
 	fetch "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/#name.csv"
@@ -38,6 +35,13 @@ db = db.map (data) ~>
 	.data
 for name, i in names
 	db[name] = db[i]
+
+dataCode = ""
+
+addDataCode = (varName, code) ->
+	dataCode += """
+		var #varName = #{JSON.stringify code};\n
+	"""
 
 typeColors =
 	normal: \#a8a878
@@ -65,7 +69,7 @@ Types = db.types
 	.map (type) ~>
 		name: type.identifier
 		color: typeColors[type.identifier]
-writeCsv \types Types
+addDataCode \Types Types
 
 categoryColors =
 	status: \#8c888c
@@ -75,97 +79,105 @@ Categories = db.move_damage_classes
 	.map (moveDamClass) ~>
 		name: moveDamClass.identifier
 		color: categoryColors[moveDamClass.identifier]
-writeCsv \categories Categories
+addDataCode \Categories Categories
 
-Efficacy = db.type_efficacy
-	.map (typeEfficacy) ~>
-		atker: typeEfficacy.damage_type_id - 1
-		defer: typeEfficacy.target_type_id - 1
-		factor: typeEfficacy.damage_factor / 100
-writeCsv \efficacy Efficacy
+Efficacy = []
+for typeEfficacy in db.type_efficacy
+	Efficacy[][typeEfficacy.damage_type_id - 1][typeEfficacy.target_type_id - 1] =
+		typeEfficacy.damage_factor / 100
+addDataCode \Efficacy Efficacy
+
+statNames =
+	"hp": \hp
+	"attack": \atk
+	"defense": \def
+	"special-attack": \sat
+	"special-defense": \sdf
+	"speed": \spe
+	"accuracy": \acc
+	"evasion": \eva
+Stats = db.stats
+	.map (stat) ~>
+		name: statNames[stat.identifier]
+		category: stat.damage_class_id - 1
+		isBattleOnly: !!stat.is_battle_only
+addDataCode \Stats Stats
+
+Targets = db.move_targets
+	.map (moveTarget) ~>
+		name: toCamelCase moveTarget.identifier
+addDataCode \Targets Targets
 
 Moves = db.moves
 	.filter (.id < 10000)
-	.map (move) ~>
-		name: toCamelCase move.identifier
-		type: move.type_id - 1
-		power: move.power
-		pp: move.pp
-		acc: move.accuracy
-		priority: move.priority
-		target: move.target_id - 1
-		category: move.damage_class_id - 1
-		eff: move.effect_id - 1
-		effChance: move.effect_chance
-writeCsv \moves Moves
+	.map (move2) ~>
+		move =
+			name: toCamelCase move2.identifier
+			type: move2.type_id - 1
+			pp: move2.pp
+			target: move2.target_id - 1
+			category: move2.damage_class_id - 1
+			eff: move2.effect_id - 1
+		move.power? = move2.power
+		move.acc? = move2.accuracy
+		move.priority? = move2.priority
+		move.effChance? = move2.effect_chance
+		move
+for moveName in db.move_names
+	if move = Moves[moveName.move_id - 1]
+		if moveName.local_language_id is 9
+			move.text = moveName.name
+addDataCode \Moves Moves
 
 pkdSizes = <[
 	steelix lugia ho-oh wailord kyogre groudon rayquaza dialga
 	palkia regigigas giratina arceus reshiram zekrom kyurem
 ]>
-PokedexMoves = []
-Pokedexs = db.pokemon_species
-	.filter (pkmSp) ~>
-		pkmSp.identifier in <[
-			shedinja blissey gardevoir
-			rampardos registeel
-			mewtwo carvanha
-			shuckle ninjask nidorino
-			sunkern
-			arceus darmanitan woobat swoobat nidoran-f rayquaza
-			escavalier cofagrigus bisharp combusken durant shellos
-		]>
-	.map (pkmSp, i) ~>
-		pkm = db.pokemon.find (pkm) ~>
-			pkm.species_id is pkmSp.id and
-			pkm.is_default
-		pkmTypes = db.pokemon_types.filter (pkmType) ~>
-			pkmType.pokemon_id is pkmSp.id
-		pkmStats = db.pokemon_stats.filter (pkmStat) ~>
-			pkmStat.pokemon_id is pkmSp.id
-		pkmMoves = db.pokemon_moves
-			.filter (pkmMove) ~>
-				pkmMove.pokemon_id is pkmSp.id and
-				pkmMove.version_group_id is 18 and
-				pkmMove.pokemon_move_method_id is 1
-			.sort (a, b) ~>
-				a.level - b.level or a.order - b.order
-		for pkmMove in pkmMoves
-			PokedexMoves.push do
-				pkd: i
-				move: pkmMove.move_id - 1
-		no: pkmSp.id
-		name: toCamelCase pkmSp.identifier
-		type1: pkmTypes.0.type_id - 1
-		type2: pkmTypes.1 and pkmTypes.1.type_id - 1
-		height: pkm.height
-		weight: pkm.weight
-		hp: pkmStats.0.base_stat
-		atk: pkmStats.1.base_stat
-		def: pkmStats.2.base_stat
-		sat: pkmStats.3.base_stat
-		sdf: pkmStats.4.base_stat
-		spe: pkmStats.5.base_stat
-		happiness: pkmSp.base_happiness
-		size: 1 + pkdSizes.includes pkmSp.identifier
-writeCsv \pkds Pokedexs
-writeCsv \pkdMoves PokedexMoves
+Pokedexs = []
+for pkmSp in db.pokemon_species
+	if pkmSp.id <= 251
+		pkd =
+			name: toCamelCase pkmSp.identifier
+			happiness: pkmSp.base_happiness
+			types: []
+			moves: []
+			size: 1 + pkdSizes.includes pkmSp.identifier
+		Pokedexs[pkmSp.id - 1] = pkd
+for pkm in db.pokemon
+	if pkd = Pokedexs[pkm.species_id - 1]
+		pkd <<<
+			height: pkm.height / 10
+			weight: pkm.weight / 10
+for pkmType in db.pokemon_types
+	if pkd = Pokedexs[pkmType.pokemon_id - 1]
+		pkd.types[pkmType.slot - 1] = pkmType.type_id - 1
+stats = [, \hp \atk \def \sat \sdf \spe]
+for pkmStat in db.pokemon_stats
+	if pkd = Pokedexs[pkmStat.pokemon_id - 1]
+		pkd[stats[pkmStat.stat_id]] = pkmStat.base_stat
+for pkmMove in db.pokemon_moves
+	if pkd = Pokedexs[pkmMove.pokemon_id - 1]
+		if pkmMove.version_group_id is 18 and pkmMove.pokemon_move_method_id is 1
+			pkd.moves.push [pkmMove.level, pkmMove.order, pkmMove.move_id - 1]
+for pkd in Pokedexs
+	pkd.moves = pkd.moves
+		.sort (a, b) ~>
+			a.0 - b.0 or a.1 - b.1
+		.map (.2)
+addDataCode \Pokedexs Pokedexs
 
-Effects = db.move_effect_prose
-	.filter (.move_effect_id < 10000)
-	.map (moveEffProse) ~>
-		eff: moveEffProse.move_effect_id - 1
-		text: moveEffProse.short_effect
-			.replace /\n{2,}/g \\n
-			.replace /\. {2,}/g " "
-		longText: moveEffProse.effect
-			.replace /\n{2,}/g \\n
-			.replace /\. {2,}/g " "
-writeCsv \effects Effects
+Effects = {}
+for moveEffProse in db.move_effect_prose
+	if moveEffProse.move_effect_id < 10000
+		Effects[moveEffProse.move_effect_id - 1] =
+			text: moveEffProse.short_effect
+				.replace /\n{2,}/g \\n
+				.replace /\. {2,}/g " "
+			longText: moveEffProse.effect
+				.replace /\n{2,}/g \\n
+				.replace /\. {2,}/g " "
+addDataCode \Effects Effects
 
-Targets = db.move_targets
-	.map (moveTarget) ~>
-		name: moveTarget.identifier
-writeCsv \targets Targets
+fs.writeFileSync \data.js dataCode
 
 console.log "Built"

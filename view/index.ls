@@ -1,60 +1,30 @@
-pages = <[types categories targets efficacy effects moves pkds pkdMoves]>
-
-data = await Promise.all pages.map (page) ~>
-	fetch "/data/#page.csv" .then (.text!)
-data = data.map (text) ~>
-	Papa.parse text,
-		header: yes
-		dynamicTyping: yes
-	.data
-[Types, Categories, Targets, Efficacy, Effects, Moves, Pkds, PkdMoves] = data
-
-tmp = []
-for eff in Effects
-	tmp[eff.eff] = eff
-Effects = tmp
-
-for move in Moves
-	move.type = Types[move.type]
-	move.category = Categories[move.category]
-	move.eff = Effects[move.eff]
-
-tmp = []
-for efficacy in Efficacy
-	tmp[][efficacy.atker][efficacy.defer] = efficacy.factor
-Efficacy = tmp
-
-for pkd in Pkds
-	pkd.types = [Types[pkd.type1]]
-	delete pkd.type1
-	if pkd.type2
-		pkd.types.1 = Types[pkd.type2]
-		delete pkd.type2
-	pkd.height /= 10
-	pkd.weight /= 10
+for pkd, i in Pokedexs
+	pkd.no = i + 1
 
 toCamelCase = (text) ->
 	(text + "")replace /[^a-zA-Z]+([a-zA-Z])?/g (, s1) ~>
 		s1 and s1.toUpperCase! or ""
 
-mdToHtml = (md, isTable) ->
-	md.replace /\[(.*?)\]{([\w\-]+):([\w\-]+)}/g (s, text, kind, name) ~>
-		switch kind
-		| \move
-			name = toCamelCase name
-		text or= name
-		"""
-			<span class="text-pink-600" title="#{kind}: #{name}">#text</span>
-		"""
+mdToHtml = (md, move, isTable) ->
+	md
+		.replace /\$effect_chance/g move.effChance
+		.replace /\[(.*?)\]{([\w\-]+):([\w\-]+)}/g (s, text, kind, name) ~>
+			switch kind
+			| \move
+				name = toCamelCase name
+			text or= name
+			"""
+				<span class="text-pink-600" title="#{kind}: #{name}">#text</span>
+			"""
 
 HomePage =
 	view: ->
 		m \.cursor-default,
-			pages.map (page) ~>
+			for let path of routes
 				m \.px-20.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50.hover:bg-slate-200,
 					onclick: !~>
-						m.route.set "/#page"
-					"/#page"
+						m.route.set path
+					path
 
 TypesPage =
 	view: ->
@@ -87,6 +57,35 @@ CategoriesPage =
 							category.name
 					m \.text-sm.text-slate-600,
 						category.color
+
+StatsPage =
+	view: ->
+		Stats.map (stat, i) ~>
+			m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
+				m \.grid,
+					style:
+						gridTemplateColumns: "60px 1fr 1fr 1fr"
+					m \div i
+					m \div,
+						stat.name
+					m \div,
+						m \.inline-block.text-center.w-16,
+							m \.text-xs.text-slate-400,
+								"Category"
+							if category = Categories[stat.category]
+								m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
+									style:
+										backgroundColor: category.color
+									category.name
+							else
+								m \.text-sm,
+									\\ufe58
+					m \div,
+						m \.inline-block.text-center,
+							m \.text-xs.text-slate-400,
+								"Is Battle Only"
+							m \.text-sm.text-slate-600,
+								stat.isBattleOnly and \yes or \no
 
 TargetsPage =
 	view: ->
@@ -125,17 +124,7 @@ EfficacyPage =
 								| 0 => "bg-purple-200 text-purple-800"
 							factor
 
-EffectsPage =
-	view: ->
-		"empty"
-
 MovesPage =
-	getLinkMoveName: (name) ->
-		name = name
-			.replace /(?<=[a-z])[A-Z]/g (s) ~> "_#s"
-			.replace /^[a-z]/ (.toUpperCase!)
-		"https://bulbapedia.bulbagarden.net/wiki/#{name}_(move)"
-
 	view: ->
 		Moves.map (move) ~>
 			m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
@@ -144,19 +133,19 @@ MovesPage =
 						gridTemplateColumns: "3fr 1fr 1fr 1fr 1fr 1fr 8fr"
 					m \div,
 						m \a.cursor-alias,
-							href: @getLinkMoveName move.name
+							href: "https://bulbapedia.bulbagarden.net/wiki/#{move.text.replace /\ /g \_}_(move)"
 							target: \_blank
 							move.name
 					m \div,
 						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 							style:
-								backgroundColor: move.type.color
-							move.type.name
+								backgroundColor: Types[move.type]color
+							Types[move.type]name
 					m \div,
 						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 							style:
-								backgroundColor: move.category.color
-							move.category.name
+								backgroundColor: Categories[move.category]color
+							Categories[move.category]name
 					m \div,
 						m \.inline-block.text-center,
 							m \.text-xs.text-slate-400,
@@ -176,18 +165,18 @@ MovesPage =
 							m \.text-sm.text-slate-600,
 								move.pp or \\ufe58
 					m \.text-sm.text-slate-600,
-						m \div move.eff?text
+						m \div Effects[move.eff]?text
 						m \ul.ml-4.list-disc.text-sm.text-slate-500.whitespace-pre-wrap,
-							move.eff?longText.trim!split \\n .map (text) ~>
+							Effects[move.eff]?longText.trim!split \\n .map (text) ~>
 								isTable = text.includes " | "
 								m \li,
 									class: m.class do
 										"list-none font-mono text-xs": isTable
-									m.trust mdToHtml text, isTable
+									m.trust mdToHtml text, move, isTable
 
-PkdsPage =
+PokedexsPage =
 	view: ->
-		Pkds.map (pkd) ~>
+		Pokedexs.map (pkd) ~>
 			m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
 				m \.grid,
 					style:
@@ -207,8 +196,8 @@ PkdsPage =
 						pkd.types.map (type) ~>
 							m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 								style:
-									backgroundColor: type.color
-								type.name
+									backgroundColor: Types[type]color
+								Types[type]name
 					m \div,
 						m \.inline-block.text-center,
 							m \.text-xs.text-slate-400,
@@ -264,17 +253,14 @@ PkdsPage =
 							m \.text-sm.text-slate-600,
 								pkd.hp + pkd.atk + pkd.def + pkd.sat + pkd.sdf + pkd.spe
 
-PkdMovesPage =
-	view: ->
-		"empty"
-
-m.route document.body, \/,
+routes =
 	"/": HomePage
 	"/types": TypesPage
 	"/categories": CategoriesPage
+	"/stats": StatsPage
 	"/targets": TargetsPage
 	"/efficacy": EfficacyPage
-	"/effects": EffectsPage
 	"/moves": MovesPage
-	"/pkds": PkdsPage
-	"/pkdMoves": PkdMovesPage
+	"/pokedexs": PokedexsPage
+
+m.route document.body, \/ routes
