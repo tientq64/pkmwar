@@ -1,21 +1,64 @@
-for pkd, i in Pokedexs
-	pkd.no = i + 1
-
 toCamelCase = (text) ->
-	(text + "")replace /[^a-zA-Z]+([a-zA-Z])?/g (, s1) ~>
+	text += ""
+	text.0 + text.substring 1 .replace /[^a-zA-Z\d]+([a-zA-Z])?/g (, s1) ~>
 		s1 and s1.toUpperCase! or ""
 
-mdToHtml = (md, move, isTable) ->
+numtoHexColor = (num) ->
+	\# + num.toString 16 .padStart 6 0
+
+mdToHtml = (md) ->
 	md
-		.replace /\$effect_chance/g move.effChance
 		.replace /\[(.*?)\]{([\w\-]+):([\w\-]+)}/g (s, text, kind, name) ~>
 			switch kind
 			| \move
 				name = toCamelCase name
+				color = \pink-600
+			| \ability
+				name = toCamelCase name
+				color = \blue-600
+			| \mechanic
+				color = \slate-800
 			text or= name
 			"""
-				<span class="text-pink-600" title="#{kind}: #{name}">#text</span>
+				<span
+					class="text-#color cursor-copy"
+					title="#{kind}: #{name}"
+					onclick="copy(`#name`)"
+				>#text</span>
 			"""
+
+window.copy = (text) !->
+	try
+		await navigator.clipboard.writeText text
+	catch
+		alert e + ""
+
+for pkd, i in Pokedexs
+	pkd.no = i + 1
+
+for type in Types
+	type.hexColor = numtoHexColor type.color
+
+for category in Categories
+	category.hexColor = numtoHexColor category.color
+
+for k, eff of Effects
+	eff.hasVar = /\$\w+/test eff.longText
+	eff.lines = eff.longText.trim!split \\n .map (text) ~>
+		isTableRow: text.includes " | "
+		html: mdToHtml text
+
+for move, i in Moves
+	move.index = i
+	move.powerNum = move.power or 0
+	move.accNum = move.acc or 0
+	if eff = Effects[move.eff]
+		move.effText = eff.text
+		move.effLines = eff.lines
+		if eff.hasVar
+			move.effLines .= map (line) ~>
+				isTableRow: line.isTableRow
+				html: line.html.replace /\$effect_chance/g move.effChance
 
 HomePage =
 	view: ->
@@ -37,10 +80,10 @@ TypesPage =
 					m \div,
 						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 							style:
-								backgroundColor: type.color
+								backgroundColor: type.hexColor
 							type.name
 					m \.text-sm.text-slate-600,
-						type.color
+						type.hexColor
 
 CategoriesPage =
 	view: ->
@@ -53,10 +96,10 @@ CategoriesPage =
 					m \div,
 						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 							style:
-								backgroundColor: category.color
+								backgroundColor: category.hexColor
 							category.name
 					m \.text-sm.text-slate-600,
-						category.color
+						category.hexColor
 
 StatsPage =
 	view: ->
@@ -64,28 +107,10 @@ StatsPage =
 			m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
 				m \.grid,
 					style:
-						gridTemplateColumns: "60px 1fr 1fr 1fr"
+						gridTemplateColumns: "60px 1fr"
 					m \div i
 					m \div,
 						stat.name
-					m \div,
-						m \.inline-block.text-center.w-16,
-							m \.text-xs.text-slate-400,
-								"Category"
-							if category = Categories[stat.category]
-								m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
-									style:
-										backgroundColor: category.color
-									category.name
-							else
-								m \.text-sm,
-									\\ufe58
-					m \div,
-						m \.inline-block.text-center,
-							m \.text-xs.text-slate-400,
-								"Is Battle Only"
-							m \.text-sm.text-slate-600,
-								stat.isBattleOnly and \yes or \no
 
 TargetsPage =
 	view: ->
@@ -103,19 +128,19 @@ EfficacyPage =
 		m \.flex.flex-col.h-full.divide-y.divide-slate-400.divide-dashed.bg-slate-50,
 			m \.flex.flex-1.divide-x.divide-slate-400.divide-dashed,
 				m \.flex.flex-1.justify-center.items-center
-				Types.map (deferType) ~>
+				Types.map (type) ~>
 					m \.flex.flex-1.justify-center.items-center.text-white,
 						style:
-							backgroundColor: deferType.color
-						deferType.name
-			Efficacy.map (atker, i) ~>
-				atkerType = Types[i]
+							backgroundColor: type.hexColor
+						type.name
+			Types.map (atkerType) ~>
 				m \.flex.flex-1.divide-x.divide-slate-400.divide-dashed,
 					m \.flex.flex-1.justify-center.items-center.text-white,
 						style:
-							backgroundColor: atkerType.color
+							backgroundColor: atkerType.hexColor
 						atkerType.name
-					atker.map (factor) ~>
+					Types.map (deferType) ~>
+						factor = Efficacy[atkerType.name][deferType.name]
 						m \.flex.flex-1.justify-center.items-center,
 							class: m.class do
 								switch factor
@@ -125,54 +150,129 @@ EfficacyPage =
 							factor
 
 MovesPage =
+	oninit: !->
+		@cols =
+			* [\name \3fr 1]
+			* [\type \1fr 1]
+			* [\category \1fr -1]
+			* [\power \1fr -1]
+			* [\acc \1fr -1]
+			* [\pp \1fr -1]
+			* [\priority \1fr -1]
+			* [\target \2fr 1]
+			* [\eff \8fr 0]
+		@gridTemplateColumns = @cols.map (.1) .join " "
+		@sortName = ""
+		@sortOrder = 1
+
+	sortCol: (col) !->
+		if @sortName is col.0
+			@sortOrder *= -1
+		else
+			@sortOrder = 1
+		@sortName = col.0
+		switch @sortName
+		| \name
+			Moves.sort (a, b) ~>
+				(a.name.localeCompare b.name) * @sortOrder
+		| \type
+			Moves.sort (a, b) ~>
+				(a.type - b.type) * @sortOrder or
+				b.category - a.category or
+				b.powerNum - a.powerNum or
+				a.index - b.index
+		| \category
+			Moves.sort (a, b) ~>
+				(b.category - a.category) * @sortOrder or
+				a.type - b.type or
+				b.powerNum - a.powerNum or
+				a.index - b.index
+		| \power
+			Moves.sort (a, b) ~>
+				(b.powerNum - a.powerNum) * @sortOrder or
+				a.type - b.type or
+				b.category - a.category or
+				a.index - b.index
+		| \acc
+			Moves.sort (a, b) ~>
+				(b.accNum - a.accNum) * @sortOrder or
+				a.index - b.index
+		| \pp
+			Moves.sort (a, b) ~>
+				(b.pp - a.pp) * @sortOrder or
+				a.index - b.index
+		| \priority
+			Moves.sort (a, b) ~>
+				(b.priority - a.priority) * @sortOrder or
+				a.index - b.index
+		| \target
+			Moves.sort (a, b) ~>
+				(a.target - b.target) * @sortOrder or
+				a.index - b.index
+		m.redraw!
+
 	view: ->
-		Moves.map (move) ~>
-			m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
+		m \div,
+			m \.px-3.py-1.border-b.border-slate-300.border-solid.bg-slate-50.sticky.top-0.select-none,
 				m \.grid,
 					style:
-						gridTemplateColumns: "3fr 1fr 1fr 1fr 1fr 1fr 8fr"
-					m \div,
-						m \a.cursor-alias,
-							href: "https://bulbapedia.bulbagarden.net/wiki/#{move.text.replace /\ /g \_}_(move)"
-							target: \_blank
-							move.name
-					m \div,
-						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
-							style:
-								backgroundColor: Types[move.type]color
-							Types[move.type]name
-					m \div,
-						m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
-							style:
-								backgroundColor: Categories[move.category]color
-							Categories[move.category]name
-					m \div,
-						m \.inline-block.text-center,
-							m \.text-xs.text-slate-400,
-								"Power"
-							m \.text-sm.text-slate-600,
-								move.power or \\ufe58
-					m \div,
-						m \.inline-block.text-center,
-							m \.text-xs.text-slate-400,
-								"Acc."
-							m \.text-sm.text-slate-600,
-								move.acc and move.acc + \% or \\ufe58
-					m \div,
-						m \.inline-block.text-center,
-							m \.text-xs.text-slate-400,
-								"PP"
-							m \.text-sm.text-slate-600,
-								move.pp or \\ufe58
-					m \.text-sm.text-slate-600,
-						m \div Effects[move.eff]?text
-						m \ul.ml-4.list-disc.text-sm.text-slate-500.whitespace-pre-wrap,
-							Effects[move.eff]?longText.trim!split \\n .map (text) ~>
-								isTable = text.includes " | "
-								m \li,
-									class: m.class do
-										"list-none font-mono text-xs": isTable
-									m.trust mdToHtml text, move, isTable
+						gridTemplateColumns: @gridTemplateColumns
+					@cols.map (col) ~>
+						m \.flex.items-center.gap-2,
+							onclick: (event) !~>
+								if col.2
+									@sortCol col
+							col.0
+							m \div,
+								if @sortName is col.0
+									@sortOrder is col.2 and \\u2193 or \\u2191
+			Moves.map (move) ~>
+				m \.px-3.py-1.border-b.border-slate-300.border-dashed.odd:bg-slate-50,
+					m \.grid,
+						style:
+							gridTemplateColumns: @gridTemplateColumns
+						m \div,
+							m \a.cursor-alias,
+								href: "https://bulbapedia.bulbagarden.net/wiki/#{move.text.replace /\ /g \_}_(move)"
+								# href: "https://pokemon.fandom.com/wiki/#{move.text.replace /\ /g \_}"
+								target: \_blank
+								move.text
+							m \.text-sm.text-pink-600.cursor-copy,
+								onclick: (event) !~>
+									copy move.name
+								move.name
+						m \div,
+							m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
+								style:
+									backgroundColor: Types[move.type]hexColor
+								Types[move.type]name
+						m \div,
+							m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
+								style:
+									backgroundColor: Categories[move.category]hexColor
+								Categories[move.category]name
+						m \.text-sm.text-slate-600,
+							move.power or \\ufe58
+						m \.text-sm.text-slate-600,
+							move.acc and move.acc + \% or \\ufe58
+						m \.text-sm.text-slate-600,
+							move.pp or \\ufe58
+						m \.text-sm.text-slate-600,
+							(move.priority > 0 and \+ or "") + move.priority
+						m \.text-sm.text-slate-600,
+							Targets[move.target]name
+						m \.text-sm.text-slate-600,
+							m \.cursor-copy,
+								onclick: (event) !~>
+									if move.effText
+										copy move.effText
+								move.effText
+							m \ul.ml-4.list-disc.text-sm.text-slate-500.whitespace-pre-wrap,
+								move.effLines?map (line) ~>
+									m \li,
+										class: m.class do
+											"list-none font-mono text-xs": line.isTableRow
+										m.trust line.html
 
 PokedexsPage =
 	view: ->
@@ -196,7 +296,7 @@ PokedexsPage =
 						pkd.types.map (type) ~>
 							m \.px-2.inline-block.text-white.text-sm.text-center.w-16,
 								style:
-									backgroundColor: Types[type]color
+									backgroundColor: Types[type]hexColor
 								Types[type]name
 					m \div,
 						m \.inline-block.text-center,
